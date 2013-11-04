@@ -12,6 +12,7 @@
 #include <vector>
 #include <map>
 #include <utility> //std::pair, std::make_pair
+#include <time.h>
 
 #include <alproxies/almemoryproxy.h>
 #include <alproxies/almotionproxy.h>
@@ -23,6 +24,7 @@
 struct Human {
     std::string id;
     float x,y,z;
+    time_t lastseen;
 };
 
 class InteractionMonitor
@@ -36,10 +38,10 @@ public:
     void init(boost::shared_ptr<AL::ALBroker> broker);
     bool connectProxies(boost::shared_ptr<AL::ALBroker> broker);
 
-    void getHumans(std::vector<Human>& detectedHumans);
+    void getHumans(std::map<std::string, Human>& detectedHumans);
 
 private:
-    void processFaces(const AL::ALValue &faces, std::vector<Human>& humans);
+    void processFaces(const AL::ALValue &faces, std::map<std::string, Human>& humans);
     Human makeHuman(const std::string& name, float yaw, float pitch);
     void onWord(const std::string &key, const AL::ALValue &value, const AL::ALValue &msg);
     void onSound(const std::string &key, const AL::ALValue &value, const AL::ALValue &msg);
@@ -54,9 +56,11 @@ private:
 
     unsigned int facesCount;
 
-    bool isSeparate(float yaw, float pitch);
+    int facesCloseTo(float yaw, float pitch);
 
     std::map<int, std::pair<float, float> > m_lastSeenHumans;
+    std::map<int, std::string> id2label;
+    int humanBuffer;
 };
 
 #endif  // EVENTS_EVENTS_H

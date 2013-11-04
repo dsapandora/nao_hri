@@ -13,6 +13,9 @@
 #include <cmath>       /* abs sin cos */
 #define PI 3.14159265
 #define FACE_SEPARATION 0.05 // value, in rad, that must separate two faces to consider them distinct
+
+#define NB_VIEWS_BEFORE_LEARNING 5
+
 using namespace std;
 
 // Helper to generate random ID.
@@ -34,7 +37,8 @@ void gen_random(char *s, const int len) {
 InteractionMonitor::InteractionMonitor():
       facesCount(0),
       fSoundCallbackMutex(AL::ALMutex::createALMutex()),
-      fWordCallbackMutex(AL::ALMutex::createALMutex())
+      fWordCallbackMutex(AL::ALMutex::createALMutex()),
+      humanBuffer(NB_VIEWS_BEFORE_LEARNING)
 {
 
     m_dataNamesList = AL::ALValue::array("FaceDetected");
@@ -53,10 +57,8 @@ void InteractionMonitor::init(boost::shared_ptr<AL::ALBroker> broker) {
     m_faceProxy->subscribe("nao_human_face_detection", FACE_DETECTION_RATE, 0.0);
 }
 
-void InteractionMonitor::getHumans(vector<Human>& humans) {
-    humans.clear();
+void InteractionMonitor::getHumans(map<string, Human>& humans) {
     AL::ALValue faces = m_memoryProxy->getData("FaceDetected");
-    //ROS_DEBUG(faces.toString().c_str());
     processFaces(faces, humans);
 }
 
@@ -66,6 +68,7 @@ Human InteractionMonitor::makeHuman(const std::string& name, float yaw, float pi
     Human h;
 
     h.id = name;
+    time(&h.lastseen);
 
     float theta = PI/2 - pitch;
     float phi = yaw;
@@ -80,14 +83,14 @@ Human InteractionMonitor::makeHuman(const std::string& name, float yaw, float pi
 }
 
 
-void InteractionMonitor::processFaces(const AL::ALValue &faces, vector<Human>& humans) {
+void InteractionMonitor::processFaces(const AL::ALValue &faces, map<string, Human>& humans) {
 
     try {
         /** Check that there are faces effectively detected. */
         if (faces.getSize() < 2 ) {
             if (facesCount != 0) {
                 ROS_INFO("No face detected");
-                //fTtsProxy.say("No face detected.");
+                humanBuffer = NB_VIEWS_BEFORE_LEARNING;
                 facesCount = 0;
             }
             return;
@@ -114,30 +117,48 @@ void InteractionMonitor::processFaces(const AL::ALValue &faces, vector<Human>& h
         // Face > [FaceInfo] > FaceInfo > ShapeInfo > pitch
         float pitch = faces[1][i][0][2];
 
-        ROS_INFO("Face (id: %d) yaw: %.2f, pitch: %.2f", naoqiFaceId, yaw, pitch);
+        ROS_INFO("Face (id: %d) confidence:%.2f yaw: %.2f, pitch: %.2f", naoqiFaceId, confidence, yaw, pitch);
         //ROS_INFO("Face (id: %d) reco confidence: %.2f", naoqiFaceId, confidence);
-        //ROS_INFO("Time_Filtered_Reco_Info: %s", faces[1][facesCount].toString().c_str());
+        //ROS_INFO("Time_Filtered_Reco_Info: %s", faces[1][i].toString().c_str());
 
-        if (confidence <= 0.15
-            && isSeparate(yaw, pitch))  // seen unknown new face
+        int candidateId = facesCloseTo(yaw, pitch);
+
+        if (naoqiFaceId == -1 && candidateId == -1)  // seen unknown new face
         {
-            char faceId[6];
-            gen_random(faceId, 5);
-            ROS_INFO("Unknown face (confidence: %.2f). Trying to learn it as <%s>", confidence, faceId);
-            if(!m_faceProxy->learnFace(faceId))
-            {
-                ROS_ERROR("Could not learn the new face!");
+            if (humanBuffer > 0) {
+                humanBuffer--;
+            }
+            else {
+                humanBuffer = NB_VIEWS_BEFORE_LEARNING;
+                char faceId[6];
+                gen_random(faceId, 5);
+                ROS_INFO("Unknown face (confidence: %.2f). Learning it as <%s>", confidence, faceId);
+                if(!m_faceProxy->learnFace(faceId))
+                {
+                    ROS_ERROR("Could not learn the new face!");
+                }
             }
         }
-        else if (naoqiFaceId != -1) // face recognized!
-        {
+        else { // face recognized!
+
+            humanBuffer = NB_VIEWS_BEFORE_LEARNING;
+            // too close to an existing face? re-use the existing face!
+            if (candidateId != -1) {
+                naoqiFaceId = candidateId;
+            }
+            else {
+                assert(naoqiFaceId != -1);
+                string label = faces[1][i][1][2];
+                id2label[naoqiFaceId] = label;
+            }
+
+            string label = id2label[naoqiFaceId];
             // save the yaw,pitch pose of the recognized face, to
             // prevent jitter at next round of detections
             m_lastSeenHumans[naoqiFaceId] = make_pair(yaw, pitch);
 
-            string label = faces[1][i][1][2];
 
-            humans.push_back(makeHuman(label, yaw, pitch));
+            humans[label] = makeHuman(label, yaw, pitch);
         }
     }
 
@@ -146,7 +167,7 @@ void InteractionMonitor::processFaces(const AL::ALValue &faces, vector<Human>& h
 /** This method check if two faces are 'far enough' to be likely to be 2 different
 persons. This prevent over-learning of badly detected faces.
 **/
-bool InteractionMonitor::isSeparate(float yaw, float pitch) {
+int InteractionMonitor::facesCloseTo(float yaw, float pitch) {
     map<int, pair<float, float> >::iterator it;
 
     for (it=m_lastSeenHumans.begin(); it!=m_lastSeenHumans.end(); ++it)
@@ -154,10 +175,10 @@ bool InteractionMonitor::isSeparate(float yaw, float pitch) {
         if (abs(yaw - it->second.first) < FACE_SEPARATION
             && abs(pitch - it->second.second) < FACE_SEPARATION)
         {
-            return false;
+            return it->first;
         }
     }
-    return true;
+    return -1;
 }
 
 void InteractionMonitor::onWord(const std::string &key, const AL::ALValue &value, const AL::ALValue &msg) {

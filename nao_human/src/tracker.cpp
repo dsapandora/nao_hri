@@ -28,7 +28,9 @@
 # POSSIBILITY OF SUCH DAMAGE.
 */
 
-#define NODE_RATE 5.0
+#define NODE_RATE 10.0
+
+#include <time.h>
 
 #include <ros/ros.h>
 #include <geometry_msgs/Transform.h>
@@ -73,7 +75,7 @@ class NaoNode
 };
 
 
-NaoNode::NaoNode() : m_pip("127.0.0.01"),m_ip("0.0.0.0"),m_port(16712),m_pport(9559),m_brokerName("nao_human_ROSBroker")
+NaoNode::NaoNode() : m_pip("nao.local"),m_ip("0.0.0.0"),m_port(16712),m_pport(9559),m_brokerName("nao_human_ROSBroker")
 {
 
 
@@ -186,7 +188,7 @@ HumanTracker::HumanTracker(int argc, char ** argv)
     // Resolve TF frames using ~tf_prefix parameter
     m_baseFrameId = m_listener.resolve(m_baseFrameId);
 
-    ROS_INFO("nao_human initialized");
+    ROS_INFO("nao_human initialized. Base frame is %s", m_baseFrameId.c_str());
 
 }
 HumanTracker::~HumanTracker()
@@ -200,14 +202,14 @@ void HumanTracker::run()
     ros::Time stamp2;
     ros::Time stamp;
 
-    vector<Human> humans;
+    map<string, Human> humans;
 
     tf::Pose pose;
     tf::Quaternion q;
     q.setRPY(0.0, 0.0, 0.0);
     pose.setRotation(q);
     geometry_msgs::TransformStamped humanTransformMsg;
-    humanTransformMsg.child_frame_id = m_baseFrameId;
+    humanTransformMsg.header.frame_id = m_baseFrameId;
 
 
 
@@ -225,13 +227,18 @@ void HumanTracker::run()
         // TODO: Something smarter than this..
         stamp = stamp1 + ros::Duration((stamp2-stamp1).toSec()/2.0);
 
-        for (std::vector<Human>::iterator it = humans.begin() ; it != humans.end(); ++it)
+        for (std::map<string, Human>::iterator it = humans.begin() ; it != humans.end(); ++it)
         {
-            Human h = *it;
-            ROS_DEBUG("Human %s at (%.2f, %.2f, %.2f)", h.id.c_str(), h.x, h.y, h.z);
-            pose.setOrigin(tf::Vector3(h.x, h.y, h.z));
+            Human h = it->second;
+            if (difftime(time(NULL), h.lastseen) > 10) {
+                    ROS_DEBUG("Human %s not seen since a while. Discarding it.", h.id.c_str());
+                    continue;
+            }
 
-            humanTransformMsg.header.frame_id = "human_" + h.id;
+            ROS_DEBUG("Human %s at (%.2f, %.2f, %.2f)", h.id.c_str(), h.x, h.y, h.z);
+            pose.setOrigin(tf::Vector3(-h.y, -h.z, h.x));
+
+            humanTransformMsg.child_frame_id = "human_" + h.id;
             humanTransformMsg.header.stamp = stamp;
             tf::transformTFToMsg(pose, humanTransformMsg.transform);
             m_transformBroadcaster.sendTransform(humanTransformMsg);
