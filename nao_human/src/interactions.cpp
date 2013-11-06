@@ -1,6 +1,8 @@
 #define FACE_DETECTION_RATE 200 //ms
 #define AVERAGEHUMANDISTANCE 1.0 // distance in meter between human and robot
 
+#include <cmath>
+
 #include <ros/ros.h> // for logging only
 
 #include "interactions.h"
@@ -13,6 +15,7 @@
 #include <cmath>       /* abs sin cos */
 #define PI 3.14159265
 #define FACE_SEPARATION 0.05 // value, in rad, that must separate two faces to consider them distinct
+#define MAX_DISTANCE_HUMAN_SOUND 0.5 // maximum distance in meters between a sound source localization and a potential speaker.
 
 #define NB_VIEWS_BEFORE_LEARNING 5
 
@@ -47,6 +50,7 @@ InteractionMonitor::InteractionMonitor():
 
 InteractionMonitor::~InteractionMonitor() {
     m_faceProxy->unsubscribe("nao_human_face_detection");
+    m_soundSourceProxy->unsubscribe("nao_human_sound_source");
 }
 
 void InteractionMonitor::init(boost::shared_ptr<AL::ALBroker> broker) {
@@ -55,11 +59,14 @@ void InteractionMonitor::init(boost::shared_ptr<AL::ALBroker> broker) {
 
     m_faceProxy->clearDatabase();
     m_faceProxy->subscribe("nao_human_face_detection", FACE_DETECTION_RATE, 0.0);
+    m_soundSourceProxy->subscribe("nao_human_sound_source");
 }
 
 void InteractionMonitor::getHumans(map<string, Human>& humans) {
     AL::ALValue faces = m_memoryProxy->getData("FaceDetected");
     processFaces(faces, humans);
+    AL::ALValue sound = m_memoryProxy->getData("ALAudioSourceLocalization/SoundLocated");
+    identifySpeaker(sound, humans);
 }
 
 Human InteractionMonitor::makeHuman(const std::string& name, float yaw, float pitch) {
@@ -76,8 +83,6 @@ Human InteractionMonitor::makeHuman(const std::string& name, float yaw, float pi
     h.x = AVERAGEHUMANDISTANCE * sin(theta) * cos(phi);
     h.y = AVERAGEHUMANDISTANCE * sin(theta) * sin(phi);
     h.z = -AVERAGEHUMANDISTANCE * cos(theta);
-    
-    ROS_INFO("%s: x:%.2f, y:%.2f, z:%.2f", name.c_str(), h.x, h.y, h.z);
     
     return h;
 }
@@ -181,18 +186,38 @@ int InteractionMonitor::facesCloseTo(float yaw, float pitch) {
     return -1;
 }
 
-void InteractionMonitor::onWord(const std::string &key, const AL::ALValue &value, const AL::ALValue &msg) {
-    AL::ALCriticalSection section(fWordCallbackMutex);
-    //addHumanDetected("word", 0.0, 0.0);
+/** This method try to match a localized sound to an identified face, and update
+ * accordingly the corresponding 'human'.
+ *
+ * If none is found, a 'virtual' human called 'unknown_speaker' is created, with an
+ * approximate position.
+ */
+void InteractionMonitor::identifySpeaker(const AL::ALValue &sounds, map<string, Human>& humans) {
+
+    // according to the doc
+    // http://www.aldebaran-robotics.com/documentation/naoqi/audio/alaudiosourcelocalization.html
+    // only one sound may be localized at a given step.
+    if (sounds.getSize() == 0) return;
+
+    map<string, Human>::iterator it;
+
+    Human h = makeHuman("unknown_speaker", sounds[0][1][0], sounds[0][1][1]);
+
+    for (it=humans.begin(); it!=humans.end(); ++it)
+    {
+        if (distance(h, it->second) < MAX_DISTANCE_HUMAN_SOUND) {
+            it->second.speaking = true;
+            return;
+        }
+    }
+    
+    humans[h.id] = h;
 
 }
 
-void InteractionMonitor::onSound(const std::string &key, const AL::ALValue &value, const AL::ALValue &msg) {
-    AL::ALCriticalSection section(fSoundCallbackMutex);
-    //addHumanDetected("sound", 0.0, 0.0);
-
+inline float InteractionMonitor::distance(const Human& h1, const Human& h2) {
+    return sqrt(pow(h1.x-h2.x,2) + pow(h1.y-h2.y,2) + pow(h1.z-h2.z,2));
 }
-
 
 
 bool InteractionMonitor::connectProxies(boost::shared_ptr<AL::ALBroker> broker) {
@@ -206,6 +231,7 @@ bool InteractionMonitor::connectProxies(boost::shared_ptr<AL::ALBroker> broker) 
     try
     {
         m_motionProxy = boost::shared_ptr<AL::ALMotionProxy>(new AL::ALMotionProxy(broker));
+        ROS_INFO("Connected to NAOqi Motion proxy.");
     }
     catch (const AL::ALError& e)
     {
@@ -215,19 +241,32 @@ bool InteractionMonitor::connectProxies(boost::shared_ptr<AL::ALBroker> broker) 
     try
     {
         m_memoryProxy = boost::shared_ptr<AL::ALMemoryProxy>(new AL::ALMemoryProxy(broker));
+        ROS_INFO("Connected to NAOqi Memory proxy.");
     }
     catch (const AL::ALError& e)
     {
         ROS_ERROR("Could not create ALMemoryProxy.");
         return false;
     }
+
     try
     {
         m_faceProxy = boost::shared_ptr<AL::ALFaceDetectionProxy>(new AL::ALFaceDetectionProxy(broker));
+        ROS_INFO("Connected to NAOqi FaceDetection proxy.");
     }
     catch (const AL::ALError& e)
     {
         ROS_ERROR("Could not create ALFaceDetectionProxy.");
+        return false;
+    }
+    try
+    {
+        m_soundSourceProxy = boost::shared_ptr<AL::ALAudioSourceLocalizationProxy>(new AL::ALAudioSourceLocalizationProxy(broker));
+        ROS_INFO("Connected to NAOqi AudioSourceLocalization proxy.");
+    }
+    catch (const AL::ALError& e)
+    {
+        ROS_ERROR("Could not create ALAudioSourceLocalizationProxy.");
         return false;
     }
     ROS_INFO("All NAOqi proxies are ready.");

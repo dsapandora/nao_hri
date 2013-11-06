@@ -17,6 +17,7 @@
 #include <alproxies/almemoryproxy.h>
 #include <alproxies/almotionproxy.h>
 #include <alproxies/alfacedetectionproxy.h>
+#include <alproxies/alaudiosourcelocalizationproxy.h>
 #include <alvalue/alvalue.h>
 
 #include <althread/almutex.h>
@@ -25,6 +26,7 @@ struct Human {
     std::string id;
     float x,y,z;
     time_t lastseen;
+    bool speaking;
 };
 
 class InteractionMonitor
@@ -42,13 +44,14 @@ public:
 
 private:
     void processFaces(const AL::ALValue &faces, std::map<std::string, Human>& humans);
+    void identifySpeaker(const AL::ALValue &sounds, std::map<std::string, Human>& humans);
     Human makeHuman(const std::string& name, float yaw, float pitch);
-    void onWord(const std::string &key, const AL::ALValue &value, const AL::ALValue &msg);
-    void onSound(const std::string &key, const AL::ALValue &value, const AL::ALValue &msg);
+    float distance(const Human& h1, const Human& h2);
 
     boost::shared_ptr<AL::ALMotionProxy> m_motionProxy;
     boost::shared_ptr<AL::ALMemoryProxy> m_memoryProxy;
     boost::shared_ptr<AL::ALFaceDetectionProxy> m_faceProxy;
+    boost::shared_ptr<AL::ALAudioSourceLocalizationProxy> m_soundSourceProxy;
     AL::ALValue m_dataNamesList;
 
     boost::shared_ptr<AL::ALMutex> fSoundCallbackMutex;
