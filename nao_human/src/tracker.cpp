@@ -28,6 +28,12 @@
 # POSSIBILITY OF SUCH DAMAGE.
 */
 
+
+
+// duration, in seconds, a human frame must be kept published once the human is
+// not seen anymore
+#define KEEP_HUMAN_ALIVE 100
+
 #define NODE_RATE 10.0
 
 #include <time.h>
@@ -49,6 +55,10 @@
 #include <boost/program_options.hpp>
 
 using namespace std;
+
+static const string camera_frame = "CameraTop_frame";
+static const string base_frame = "odom";
+
 /*
 from nao_driver import *
 
@@ -165,6 +175,7 @@ protected:
     ros::NodeHandle m_privateNh;
 
     std::string m_baseFrameId;
+    std::string m_cameraFrameId;
 
     tf::TransformBroadcaster m_transformBroadcaster;
     tf::TransformListener m_listener;
@@ -172,7 +183,7 @@ protected:
 
 HumanTracker::HumanTracker(int argc, char ** argv)
  : m_rate(NODE_RATE), m_privateNh("~"),
-   m_baseFrameId("CameraTop_frame")
+   m_baseFrameId(base_frame)
 {
     parse_command_line(argc,argv);
     if (!connectNaoQi())
@@ -187,6 +198,7 @@ HumanTracker::HumanTracker(int argc, char ** argv)
     m_privateNh.param("base_frame_id", m_baseFrameId, m_baseFrameId);
     // Resolve TF frames using ~tf_prefix parameter
     m_baseFrameId = m_listener.resolve(m_baseFrameId);
+    m_cameraFrameId = m_listener.resolve(camera_frame);
 
     ROS_INFO("nao_human initialized. Base frame is %s", m_baseFrameId.c_str());
 
@@ -204,13 +216,13 @@ void HumanTracker::run()
 
     map<string, Human> humans;
 
-    tf::Pose pose;
+    tf::StampedTransform pose; // human pose in the camera frame
+
+    pose.frame_id_ = m_cameraFrameId;
+
     tf::Quaternion q;
     q.setRPY(0.0, 0.0, 0.0);
     pose.setRotation(q);
-    geometry_msgs::TransformStamped humanTransformMsg;
-    humanTransformMsg.header.frame_id = m_baseFrameId;
-
 
 
     ROS_INFO("Starting main loop of nao_human_tracker");
@@ -218,30 +230,42 @@ void HumanTracker::run()
     {
         r.sleep();
         ros::spinOnce();
+
         stamp1 = ros::Time::now();
-
         m_monitor.getHumans(humans);
-
         stamp2 = ros::Time::now();
-        //ROS_DEBUG("dt is %f",(stamp2-stamp1).toSec()); % dt is typically around 1/1000 sec
-        // TODO: Something smarter than this..
         stamp = stamp1 + ros::Duration((stamp2-stamp1).toSec()/2.0);
 
         for (std::map<string, Human>::iterator it = humans.begin() ; it != humans.end(); ++it)
         {
             Human h = it->second;
-            if (difftime(time(NULL), h.lastseen) > 10) {
+            if (difftime(time(NULL), h.lastseen) > KEEP_HUMAN_ALIVE) {
                     ROS_DEBUG("Human %s not seen since a while. Discarding it.", h.id.c_str());
                     continue;
             }
 
-            ROS_DEBUG("Human %s at (%.2f, %.2f, %.2f)", h.id.c_str(), h.x, h.y, h.z);
+            ROS_INFO("Publishing human %s at (%.2f, %.2f, %.2f)", h.id.c_str(), h.x, h.y, h.z);
             pose.setOrigin(tf::Vector3(-h.y, -h.z, h.x));
+            pose.stamp_ = stamp;
+            pose.child_frame_id_ = "human_" + h.id;
 
-            humanTransformMsg.child_frame_id = "human_" + h.id;
-            humanTransformMsg.header.stamp = stamp;
-            tf::transformTFToMsg(pose, humanTransformMsg.transform);
-            m_transformBroadcaster.sendTransform(humanTransformMsg);
+            try{
+                if (m_baseFrameId != m_cameraFrameId) {
+                    m_listener.waitForTransform(m_cameraFrameId, m_baseFrameId, 
+                                                ros::Time(0), 
+                                                ros::Duration(1));
+
+                    tf::StampedTransform camera2world;
+                    m_listener.lookupTransform(m_baseFrameId, m_cameraFrameId, 
+                                               ros::Time(0), 
+                                               camera2world);
+                    pose *= camera2world;
+                }
+                m_transformBroadcaster.sendTransform(pose);
+            }
+            catch (tf::TransformException ex){
+                ROS_ERROR("Not publishing human %s: %s", h.id.c_str(), ex.what());
+            }
         }
     }
     ROS_INFO("nao_human_tracker stopped.");
