@@ -54,6 +54,12 @@
 // Other includes
 #include <boost/program_options.hpp>
 
+#ifdef WITH_KNOWLEDGE
+#include <liboro/oro.h>
+#include <liboro/socket_connector.h>
+#endif
+
+
 using namespace std;
 
 static const string camera_frame = "CameraTop_frame";
@@ -82,12 +88,34 @@ class NaoNode
       boost::shared_ptr<AL::ALBroker> m_broker;
 
 
+#ifdef WITH_KNOWLEDGE
+      oro::SocketConnector connector;
+      oro::Ontology* kb;
+#endif
+
+
 };
 
 
-NaoNode::NaoNode() : m_pip("nao.local"),m_ip("0.0.0.0"),m_port(16712),m_pport(9559),m_brokerName("nao_human_ROSBroker")
+NaoNode::NaoNode() : m_pip("nao.local"),
+                     m_ip("0.0.0.0"),
+                     m_port(16712),
+                     m_pport(9559),
+#ifdef WITH_KNOWLEDGE
+                     connector("localhost", "6969"),
+#endif
+                     m_brokerName("nao_human_ROSBroker")
 {
 
+#ifdef WITH_KNOWLEDGE
+        try {
+            kb = oro::Ontology::createWithConnector(connector);
+        } catch (oro::OntologyServerException ose) {
+            ROS_ERROR_STREAM("Could not connect to the knowledge base: " << ose.what());
+            exit(1);
+        }
+#endif
+ 
 
 }
 

@@ -25,6 +25,15 @@ find_package(Boost REQUIRED COMPONENTS program_options signals)
 # Information for other packages to import this module
 catkin_package(CATKIN_DEPENDS roscpp)
 
+##########################################
+##           Options                   ###
+##########################################
+
+option (WITH_KNOWLEDGE "Add support for exporting to a KB-API knowledge base" OFF)
+
+###########
+## Build ##
+###########
 
 include_directories(include 
         ${catkin_INCLUDE_DIRS}
@@ -32,10 +41,26 @@ include_directories(include
         ${NAOqi_INCLUDE_DIRS})
 
 add_executable(tracker src/tracker.cpp src/interactions.cpp)
-target_link_libraries(tracker
+
+if (WITH_KNOWLEDGE)
+
+    add_definitions(-DWITH_KNOWLEDGE)
+    find_package(PkgConfig)
+    pkg_check_modules(LIBKB REQUIRED liboro)
+    include_directories(${LIBKB_INCLUDE_DIRS})
+    target_link_libraries(tracker
+        ${catkin_LIBRARIES}
+        ${NAOqi_LIBRARIES}
+        ${Boost_LIBRARIES}
+        ${LIBKB_LDFLAGS}
+    )
+else()
+
+    target_link_libraries(tracker
         ${catkin_LIBRARIES}
         ${NAOqi_LIBRARIES}
         ${Boost_LIBRARIES})
+endif()
 
 add_dependencies(tracker ${catkin_EXPORTED_TARGETS})
 
